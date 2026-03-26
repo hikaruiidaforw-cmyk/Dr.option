@@ -40,7 +40,7 @@ const MOCK_CONTRACT_DATA = {
   },
 };
 
-export default function NewContractPage() {
+function NewContractPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -508,5 +508,13 @@ ${formData.otherTerms ? `第13条（その他特約事項）\n${formData.otherTe
         </Button>
       </div>
     </div>
+  );
+}
+
+export default function NewContractPage() {
+  return (
+    <React.Suspense fallback={<div className="flex items-center justify-center min-h-[400px]"><div className="w-8 h-8 border-4 border-accent/30 border-t-accent rounded-full animate-spin" /></div>}>
+      <NewContractPageContent />
+    </React.Suspense>
   );
 }
