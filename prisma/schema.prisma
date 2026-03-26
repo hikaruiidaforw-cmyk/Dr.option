@@ -1,0 +1,456 @@
+// Dr.option Prisma Schema
+// 医師の開業・採用マッチングプラットフォーム
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ──────────────────────────────────────
+// ユーザー・認証
+// ──────────────────────────────────────
+
+enum UserRole {
+  DOCTOR
+  CORPORATION
+  CONSULTANT
+  ADMIN
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  hashedPassword String
+  role           UserRole
+  isActive       Boolean   @default(true)
+  emailVerified  DateTime?
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  doctorProfile      DoctorProfile?
+  corporationProfile CorporationProfile?
+  consultantProfile  ConsultantProfile?
+  sentMessages       ChatMessage[]    @relation("SentMessages")
+  notifications      Notification[]
+  sessions           Session[]
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ──────────────────────────────────────
+// ドクター関連
+// ──────────────────────────────────────
+
+model DoctorProfile {
+  id                    String    @id @default(cuid())
+  userId                String    @unique
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 基本情報
+  displayName           String    // 匿名表示名（例: "Dr.A"）
+  realName              String?   // 実名（コンサルタント以上に公開）
+  gender                Gender?
+  birthYear             Int?
+  profileImageUrl       String?
+
+  // 医師情報
+  medicalLicenseYear    Int       // 医師免許取得年
+  specialties           DoctorSpecialty[]
+  boardCertifications   String[]  // 専門医資格（例: ["日本内科学会認定内科医"]）
+  currentHospital       String?   // 現在の勤務先（任意）
+  currentPosition       String?   // 現職（例: "常勤医師", "非常勤医師"）
+
+  // 希望条件
+  desiredDepartments    String[]  // 希望診療科（例: ["内科", "皮膚科"]）
+  desiredAreas          String[]  // 希望エリア（例: ["東京都", "神奈川県"]）
+  desiredSalaryMin      Int?      // 希望年収下限（万円）
+  desiredSalaryMax      Int?      // 希望年収上限（万円）
+  independenceTimeline  String?   // 独立希望時期（例: "3〜5年後"）
+  selfIntroduction      String?   // 自己紹介・ビジョン（フリーテキスト）
+
+  // 状態
+  isPublic              Boolean   @default(true) // プロフィール公開状態
+  lastActiveAt          DateTime  @default(now())
+
+  // リレーション
+  applications          Application[]
+  favorites             Favorite[]
+  scoutReceived         Scout[]
+  careerEvents          CareerEvent[]
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model DoctorSpecialty {
+  id              String        @id @default(cuid())
+  doctorProfileId String
+  doctorProfile   DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  name            String        // 診療科名（例: "循環器内科"）
+  yearsOfExp      Int?          // 経験年数
+}
+
+model CareerEvent {
+  id              String        @id @default(cuid())
+  doctorProfileId String
+  doctorProfile   DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  year            Int           // 年（例: 2015）
+  title           String        // タイトル（例: "医師免許取得"）
+  description     String?       // 詳細説明
+  sortOrder       Int           @default(0)
+  createdAt       DateTime      @default(now())
+}
+
+// ──────────────────────────────────────
+// 医療法人関連
+// ──────────────────────────────────────
+
+model CorporationProfile {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 法人情報
+  corporationName   String   // 医療法人名
+  representativeName String  // 代表者名
+  corporationType   String?  // 法人種別（例: "医療法人社団", "個人"）
+  establishedYear   Int?     // 設立年
+  employeeCount     Int?     // 従業員数
+  websiteUrl        String?
+  logoUrl           String?
+
+  // 連絡先
+  contactPerson     String   // 担当者名
+  contactEmail      String
+  contactPhone      String?
+  address           String?  // 所在地
+  description       String?  // 法人紹介
+
+  // リレーション
+  jobPostings       JobPosting[]
+  sentScouts        Scout[]
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+// ──────────────────────────────────────
+// コンサルタント関連
+// ──────────────────────────────────────
+
+model ConsultantProfile {
+  id             String   @id @default(cuid())
+  userId         String   @unique
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  displayName    String
+  department     String?  // 所属部署
+  specialization String?  // 専門分野
+
+  // 担当案件
+  assignedMatches Match[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// ──────────────────────────────────────
+// 求人・譲渡条件
+// ──────────────────────────────────────
+
+enum JobPostingStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+  ARCHIVED
+}
+
+model JobPosting {
+  id                    String           @id @default(cuid())
+  corporationId         String
+  corporation           CorporationProfile @relation(fields: [corporationId], references: [id], onDelete: Cascade)
+
+  // 求人基本情報
+  title                 String           // 求人タイトル
+  description           String           // 求人詳細（リッチテキスト）
+  department            String           // 診療科（例: "内科"）
+  clinicName            String           // クリニック名
+  clinicAddress         String           // クリニック所在地
+  clinicArea            String           // エリア（例: "東京都渋谷区"）
+
+  // 雇用条件
+  employmentType        String           // 雇用形態（例: "常勤"）
+  salaryMin             Int?             // 年収下限（万円）
+  salaryMax             Int?             // 年収上限（万円）
+  workingHours          String?          // 勤務時間
+  holidays              String?          // 休日
+  benefits              String?          // 福利厚生
+
+  // ★ 譲渡条件（Dr.optionのコア）
+  transferPrice         Int?             // 想定譲渡価格（万円）
+  transferPriceNote     String?          // 価格に関する補足
+  transferTimingMin     Int?             // 最短譲渡時期（年後）
+  transferTimingMax     Int?             // 最長譲渡時期（年後）
+  transferConditions    String?          // 譲渡条件詳細（フリーテキスト）
+  includesRealEstate    Boolean          @default(false) // 不動産を含むか
+  includesEquipment     Boolean          @default(true)  // 医療機器を含むか
+  includesStaff         Boolean          @default(true)  // スタッフ引継ぎを含むか
+  annualRevenue         Int?             // 年間売上（万円）
+  annualProfit          Int?             // 年間利益（万円）
+  patientCount          Int?             // 1日平均患者数
+
+  // 状態
+  status                JobPostingStatus @default(DRAFT)
+  publishedAt           DateTime?
+  closedAt              DateTime?
+
+  // リレーション
+  applications          Application[]
+  favorites             Favorite[]
+  scouts                Scout[]
+  images                JobPostingImage[]
+
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+}
+
+model JobPostingImage {
+  id           String     @id @default(cuid())
+  jobPostingId String
+  jobPosting   JobPosting @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  imageUrl     String
+  caption      String?
+  sortOrder    Int        @default(0)
+}
+
+// ──────────────────────────────────────
+// 応募・スカウト・マッチング
+// ──────────────────────────────────────
+
+enum ApplicationStatus {
+  PENDING      // 応募済み
+  REVIEWING    // 審査中
+  INTERVIEW    // 面談調整中
+  MATCHED      // マッチング成立
+  REJECTED     // 不成立
+  WITHDRAWN    // 応募取消
+}
+
+model Application {
+  id              String            @id @default(cuid())
+  doctorProfileId String
+  doctorProfile   DoctorProfile     @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  jobPostingId    String
+  jobPosting      JobPosting        @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+
+  status          ApplicationStatus @default(PENDING)
+  coverLetter     String?           // 応募メッセージ
+  statusNote      String?           // ステータス変更時のメモ
+
+  match           Match?
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([doctorProfileId, jobPostingId])
+}
+
+enum ScoutStatus {
+  SENT
+  READ
+  INTERESTED
+  DECLINED
+}
+
+model Scout {
+  id              String            @id @default(cuid())
+  corporationId   String
+  corporation     CorporationProfile @relation(fields: [corporationId], references: [id], onDelete: Cascade)
+  doctorProfileId String
+  doctorProfile   DoctorProfile     @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  jobPostingId    String
+  jobPosting      JobPosting        @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+
+  status          ScoutStatus       @default(SENT)
+  message         String            // スカウトメッセージ
+
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@unique([corporationId, doctorProfileId, jobPostingId])
+}
+
+model Favorite {
+  id              String        @id @default(cuid())
+  doctorProfileId String
+  doctorProfile   DoctorProfile @relation(fields: [doctorProfileId], references: [id], onDelete: Cascade)
+  jobPostingId    String
+  jobPosting      JobPosting    @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime      @default(now())
+
+  @@unique([doctorProfileId, jobPostingId])
+}
+
+// ──────────────────────────────────────
+// マッチング・契約管理
+// ──────────────────────────────────────
+
+enum MatchStatus {
+  NEGOTIATING       // 条件交渉中
+  CONTRACT_DRAFTING // 契約書作成中
+  EMPLOYED          // 雇用開始（管理者として勤務中）
+  TRANSFER_READY    // 譲渡手続き開始
+  COMPLETED         // 事業承継完了
+  CANCELLED         // キャンセル
+}
+
+model Match {
+  id               String            @id @default(cuid())
+  applicationId    String            @unique
+  application      Application       @relation(fields: [applicationId], references: [id])
+  consultantId     String?
+  consultant       ConsultantProfile? @relation(fields: [consultantId], references: [id])
+
+  status           MatchStatus       @default(NEGOTIATING)
+
+  // 合意条件
+  agreedSalary     Int?              // 合意年収（万円）
+  agreedTransferPrice Int?           // 合意譲渡価格（万円）
+  agreedTransferDate  DateTime?      // 合意譲渡予定日
+  employmentStartDate DateTime?      // 雇用開始日
+
+  // 契約書
+  contracts        Contract[]
+
+  // メモ
+  notes            MatchNote[]
+
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+}
+
+enum ContractType {
+  EMPLOYMENT     // 雇用契約書
+  TRANSFER_MOU   // 譲渡特約覚書
+  TRANSFER_FINAL // 事業譲渡契約書
+}
+
+enum ContractStatus {
+  DRAFT
+  REVIEW
+  SIGNED
+  EXPIRED
+}
+
+model Contract {
+  id           String         @id @default(cuid())
+  matchId      String
+  match        Match          @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  type         ContractType
+  status       ContractStatus @default(DRAFT)
+  title        String
+  content      String         // 契約内容（Markdown or HTML）
+  fileUrl      String?        // 生成済みPDF/DOCX URL
+  signedAt     DateTime?
+
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+}
+
+model MatchNote {
+  id        String   @id @default(cuid())
+  matchId   String
+  match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  authorId  String   // User.id
+  content   String
+  createdAt DateTime @default(now())
+}
+
+// ──────────────────────────────────────
+// チャット
+// ──────────────────────────────────────
+
+model ChatRoom {
+  id           String        @id @default(cuid())
+  participants ChatParticipant[]
+  messages     ChatMessage[]
+  isAnonymous  Boolean       @default(true) // 匿名チャットかどうか
+  relatedJobId String?       // 関連する求人ID（任意）
+
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+}
+
+model ChatParticipant {
+  id         String   @id @default(cuid())
+  chatRoomId String
+  chatRoom   ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  userId     String
+  displayName String  // チャット内での表示名（匿名時はロール名等）
+
+  joinedAt   DateTime @default(now())
+
+  @@unique([chatRoomId, userId])
+}
+
+model ChatMessage {
+  id         String   @id @default(cuid())
+  chatRoomId String
+  chatRoom   ChatRoom @relation(fields: [chatRoomId], references: [id], onDelete: Cascade)
+  senderId   String
+  sender     User     @relation("SentMessages", fields: [senderId], references: [id])
+
+  content    String
+  isRead     Boolean  @default(false)
+  readAt     DateTime?
+
+  createdAt  DateTime @default(now())
+}
+
+// ──────────────────────────────────────
+// 通知
+// ──────────────────────────────────────
+
+enum NotificationType {
+  NEW_APPLICATION
+  SCOUT_RECEIVED
+  STATUS_CHANGED
+  NEW_MESSAGE
+  CONTRACT_READY
+  SYSTEM
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type      NotificationType
+  title     String
+  message   String
+  linkUrl   String?          // 遷移先URL
+  isRead    Boolean          @default(false)
+  readAt    DateTime?
+
+  createdAt DateTime         @default(now())
+}
